@@ -3,20 +3,23 @@ ucp - UDT based remote file copy
 */
 
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <cstring>
 #include <string>
 #include <map>
+#include <sys/stat.h>
 #include <netdb.h>
-#include <ossp/uuid++.hh>
+#include <librsync.h>
 #include "udt.h"
 #include "ucp.h"
 
-static int local_to_remote(UDTSOCKET hnd, int token, vector<string> fnames);
-static int remote_to_local(UDTSOCKET hnd, int token, vector<string> fnames);
-static int ucp_request_auth(UDTSOCKET hnd, int token, int seq);
-
+static int local_to_remote(UDTSOCKET hnd, unsigned int* token, 
+						   unsigned int* sequence, vector<string>& fnames, remote_path& rp);
+static int remote_to_local(UDTSOCKET hnd, unsigned int* token, 
+						   unsigned int* sequence, vector<string>& fnames, remote_path& rp);
 using namespace std;
 
 #ifdef TEST
@@ -25,26 +28,78 @@ int _ucp_main(int argc, char* argv[])
 int main(int argc, char* argv[])
 #endif
 {
-//	GetOpt getopt (argc, argv, "vp:");
+	int opt;
+	int port = 0;
+	bool encryption;
 
+	while((opt = getopt(argc,argv,"hvdep:")) !=-1) {
+		switch(opt){
+		case 'h':
+			// show_usage();
+			break;
+		case 'v':
+			break;
+		case 'd':
+			break;
+		case 'p':
+			port = atoi(optarg);
+			break;
+		case 'e':
+			break;
+		default:
+			break;
+		}
+	}
+
+	// for (int i = 0; i < argc; i++)
+	// 	cout << "argv[" << i << "]: " << argv[i] << endl;
+
+	int first = optind;
+	int last = argc - 1;
+	// for (first = optind; optind < argc; optind++)
+	// 	last = optind;
+
+	string first_f(argv[first]);
+	string last_f(argv[last]);
+
+	remote_path rp;
+	bool remote_local;
+	string fn_entry;
+	vector<string> flist;
+
+	if (check_one_colon(first_f) && check_one_colon(last_f)) {
+		cout << "invalid" << endl;
+		exit(1);
+	} else if (check_one_colon(first_f)) {
+		remote_local = true;
+		rp = check_remote_path(first_f);
+		cout << "Not Implemented." << endl;
+		exit(1);
+	} else if (check_one_colon(last_f)) {
+		remote_local = false;
+		rp = check_remote_path(last_f);
+		fn_entry = argv[2];
+	} else {
+		cout << "invalid" << endl;
+		exit(1);
+	}
 
     int rc, errno;
     struct addrinfo hints, *peer;
-    ucp_header header;
+    struct ucp_header header;
     char tid = 0;
-    string peer_host("localhost");
-    string peer_port(UDT_PORT);
+
+    string peer_host(rp.host);
+
+	char p[6];
+	if (port == 0)
+		port = UDT_PORT;
+	snprintf(p, 6, "%d", port);
+	string peer_port(p);
+	cout << "port: " << peer_port << endl;
     
-    uuid id;
-    id.make(UUID_MAKE_V4);
-    // cout << id.string() << endl;  
-    // cout << id.integer() << endl;
-    // cout << id.binary() << endl;
-    
-    // cout << "unsigned long long:" << sizeof(unsigned long long) << endl;
-  
-    if (UDT::ERROR == UDT::startup()) {
-        cout << "init: " << UDT::getlasterror().getErrorMessage() << endl;
+	if (UDT::ERROR == UDT::startup()) {
+		cout << "init: " << UDT::getlasterror().getErrorMessage() << endl;
         return -1;
     }      
 
@@ -68,94 +123,85 @@ int main(int argc, char* argv[])
 
 	freeaddrinfo(peer);
 
-	int token = 1;
-	vector<string> fnames;
-		
-	if (true) {
-		local_to_remote(hnd, token, fnames);
-	} else{
-		remote_to_local(hnd, token, fnames);
+	srand(time(NULL));
+	unsigned int token = rand();
+	unsigned int sequence = 0;
+	cout << "0: token: " << token << ", seq: " << sequence << endl;
+
+	// ========= auth begin =========
+	struct ucp_header hdr0, hdr1;
+	gen_ucp_header(&hdr0, UCP_OP_AUTH, token, sequence, 0, 1);
+	rc = ucp_send(hnd, &hdr0, NULL);
+	rc = ucp_recv(hnd, &hdr0, NULL, 0);
+	if (check_ucp_header(hdr0, UCP_OP_ACK, token, sequence + 1) != 0){
+		show_ucp_header(hdr0);
 	}
-    
-    // string buf("This is a test.");
-    // header.token = htonl(256);
-    // header.op = UCP_OP_TOKEN;
-    // header.seq = htonl(1);
-    // header.length = htonl(buf.size());
+	token = ntohl(hdr0.token);
+	sequence = ntohl(hdr0.seq);
+	// ========= auth end   =========
 
-    // char buf2[1024];
-
-    // rc = ucp_send_dummy(hnd, buf.c_str(), buf.size());
-    // // rc = ucp_send(hnd, header, buf.c_str());
-	// rc = UDT::recv(hnd, buf2, sizeof(buf2), 0);
-	// udt_status(hnd);
-	// cout << buf2 << ": " << strlen(buf2) << endl;
-    
+	cout << "1: token: " << token << ", seq: " << sequence << endl;
+	
+	if (remote_local) {
+		cout << "remote->local  name: " << rp.name << ", host: " << rp.host << ", path: " << rp.path << endl;
+		remote_to_local(hnd, &token, &sequence, flist, rp);
+	} else{
+		if (get_file_list(fn_entry, &flist) != 0) {
+			cout << fn_entry << " is not found." << endl;
+			exit(1);
+		}
+		cout << "local->remote  name: " << rp.name << ", host: " << rp.host << ", path: " << rp.path << endl;
+		local_to_remote(hnd, &token, &sequence, flist, rp);
+		cout << "2: token: " << token << ", seq: " << sequence << endl;
+	}
+	UDT::close(hnd);
     UDT::cleanup();
     return 0;
 }
 
-static int local_to_remote(UDTSOCKET hnd, int token, vector<string> fnames)
-{
-	// send auth
-	ucp_request_auth(hnd, token, 0);
-	// // send meta data 
-	// ucp_send();
-	// ucp_recv();
-	// // send chunk
-	// ucp_send();
-	// ucp_recv();
-}
-
-static int remote_to_local(UDTSOCKET hnd, int token, vector<string> fnames)
-{
-	// send auth
-	ucp_request_auth(hnd, token, 0);
-	// // recv meta data 
-	// ucp_send();
-	// ucp_recv();
-	// // recv chunk
-	// ucp_send();
-	// ucp_recv();
-}
-
-
-static int ucp_request_auth(UDTSOCKET hnd, int token, int seq)
+static int local_to_remote(UDTSOCKET hnd, unsigned int* token, unsigned int* sequence, vector<string>& flist, remote_path& rp)
 {
 	int rc;
-	ucp_header hdr0, hdr1;
-	u64 length = 10;
-	void *buf0, *buf1;
+	struct chunk_meta chunk_mta;
+	gen_chunk_meta(flist, rp, chunk_mta);
+	chunk_mta.type = UCP_META_TYPE_UPLOAD;
+	cout << "local_to_remote: " << *token  << endl;
+	if ((rc = ucp_send_metadata(hnd, &chunk_mta, token, sequence)) == -1) {
+		cout << "Sending metadata failed." << endl;
+		return -1;
+	}
+	if ((rc = ucp_send_chunk(hnd, &chunk_mta, token, sequence)) == -1) {
+		cout << "Sending chunk failed." << endl;
+		return -1;
+	}
+}
 
-	hdr0.version = UCP_VERSION;
-	hdr0.op = UCP_OP_AUTH;
-	hdr0.token = htonl(token);
-	hdr0.seq = htonl(seq);
-	hdr0.length = length;
-	hdr0.flags = htonl(1);
+static int remote_to_local(UDTSOCKET hnd, unsigned int* token, unsigned int* sequence, vector<string>& fnames, remote_path& rp)
+{
+	int rc;
+	struct chunk_meta chunk_mta;
+	gen_chunk_meta(fnames, rp, chunk_mta);
+	chunk_mta.type = UCP_META_TYPE_DOWNLOAD;
+	if ((rc = ucp_send_metadata(hnd, &chunk_mta, token, sequence)) == -1) {
+		cout << "Sending metadata failed." << endl;
+		return -1;
+	}
+	if ((rc = ucp_recv_metadata(hnd, &chunk_mta, token, sequence)) == -1) {
+		cout << "Receiving metadata failed." << endl;
+		return -1;
+	}
+	if ((rc = ucp_recv_chunk(hnd, &chunk_mta, token, sequence)) == -1) {
+		cout << "Receiving chunk failed." << endl;
+		return -1;
+	}
+}
 
-	buf0 = malloc(10);
-	if (buf0 == NULL)
-		return 1;
-	memset(buf0, 1, 10);
-	strcpy((char*)buf0, "This Test");
-	rc = ucp_send(hnd, hdr0, (char*)buf0);
-	if (buf0 != NULL)
-		free(buf0);
-	if (rc == -1)
-		return 1;
-	buf1 = malloc(10);
-	if (buf1 == NULL)
-		return 1;
-	cout << "receiving...";
-	rc = ucp_recv(hnd, hdr1, (char*)buf1, sizeof(buf1));
-	if (rc == -1)
-		return 1;
-	cout << "received." << endl;
-	// check auth
 
-	if (buf1 != NULL)
-		free(buf1);
-
-	return 0;
+void show_usage(void) 
+{
+	cout << "-v version" << endl;
+	cout << "-d debug" << endl;
+	cout << "-e encription" << endl;
+	cout << "-p port UDT_port" << endl;
+	cout << "-h show this usage." << endl;
 }

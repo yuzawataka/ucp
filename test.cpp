@@ -2,6 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <sstream>
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <sys/stat.h>
@@ -13,6 +14,7 @@
 #include <udt.h>
 #include "ucp.h"
 #include "minunit.h"
+#include <msgpack.hpp>
 
 using namespace std;
 
@@ -42,29 +44,53 @@ static char* test_check_remote_path()
 
 static char* test_get_xattr()
 {
-	string test0("test.cpp");
-	map<string, string> attrs;
+	string test0("ucp.cpp");
 	int rc;
-	if ((rc = get_xattr(test0, &attrs)) >= 0) {
-		cout << "rc:" << rc  << endl;
-		map<string, string>::iterator i = attrs.begin();
-		while(i != attrs.end()) {
-			cout << (*i).first << ": " << (*i).second << endl;
-			++i;
-		}
-		cout << "OK" << endl;
-	} else {
-		cout << "NG" << endl;
-	}
+	msgpack::sbuffer sbuf;
+	rc = get_xattr(test0, &sbuf);
+	cout << "xattr(" << rc << ","<< sbuf.size() << "): " << sbuf.data() << endl;
+
+	msgpack::unpacked msg;
+	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+ 	msgpack::object obj = msg.get();
+	cout << obj << endl;
+	map<string, string> xattrs;
+	obj.convert(&xattrs);
+
+	return 0;
+}
+
+
+static char* test_set_xattr()
+{
+	string test0("ucp.cpp");
+	int rc;
+	msgpack::sbuffer sbuf;
+	rc = get_xattr(test0, &sbuf);
+	msgpack::unpacked msg;
+	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+ 	msgpack::object obj = msg.get();
+	cout << obj << endl;
+	map<string, string> xattrs;
+	obj.convert(&xattrs);
+
+	string test1("/tmp/ucp-test.cpp");
+	system("/bin/touch /tmp/ucp-test.cpp");
+	rc = set_xattr((char*)test1.c_str(), &xattrs);
+	rc = get_xattr(test1, &sbuf);
+	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+ 	obj = msg.get();
+	cout << obj << endl;
 	return 0;
 }
 
 
 static char* test_gen_each_meta()
 {
-	string test0("test.cpp");
-	file_mdata fm;
-	if (gen_each_meta(test0, 0, &fm) == 0) {
+	string test0("ucp.cpp");
+	file_info fi;
+	msgpack::sbuffer sbuf;
+	if (gen_each_meta(test0, 0, 0, &fi, &sbuf) == 0) {
 		cout << "OK" << endl;
 	} else {
 		cout << "NG" << endl;
@@ -92,14 +118,100 @@ static char* test_gen_chunk()
 	return 0;
 }
 
+static char* test_gen_chunk_meta()
+{
+	string test0("root@192.168.2.1:hoge");
+	remote_path rp;
+	struct chunk_meta chunk_mta;
+	vector<string> flist;
+	msgpack::sbuffer sbuf;
+	msgpack::unpacked msg;
+
+	rp = check_remote_path(test0);
+	flist.push_back("test.cpp");
+	flist.push_back("ucp.cpp");
+	flist.push_back("ucpd.cpp");
+	gen_chunk_meta(flist, rp, chunk_mta);
+	msgpack::pack(sbuf, chunk_mta);
+	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+ 	msgpack::object obj = msg.get();
+	cout << obj << endl;
+
+	return 0;
+}
+
+// static char* test_read_chunk_meta()
+// {
+// 	struct chunk_meta_test chunk_mta;
+// 	ifstream file("/tmp/save.dat");
+// 	boost::archive::text_iarchive ia(file);
+// }
+
+// static char* test_gen_whole_chunk()
+// {
+// 	chunk_meta *chunk_mta;
+// 	vector<string> file_ls;
+// 	string tmpfname("/tmp/test_gen_whole_chunk_orig");
+// 	file_ls.push_back("test.cpp");
+// 	file_ls.push_back("ucp.cpp");
+// 	file_ls.push_back("ucpd.cpp");
+// 	cout << "chunk_meta: " << sizeof(chunk_meta) << endl; 
+// 	cout << "file_info: " << sizeof(file_info) * file_ls.size() << endl;
+// 	chunk_mta = (chunk_meta*)malloc(sizeof(chunk_meta) + 
+// 									  sizeof(file_info) * file_ls.size());
+// 	gen_whole_chunk(file_ls, chunk_mta, tmpfname);
+// 	if (chunk_mta != NULL)
+// 		free(chunk_mta);
+// 	return 0;
+// }
+
+// static char* test_send_chunk()
+// {
+// 	vector<string> fnames;
+// 	fnames.push_back("test.cpp");
+// 	fnames.push_back("ucp.cpp");
+// 	fnames.push_back("ucpd.cpp");
+
+// 	struct chunk_meta chunk_mta;
+// 	gen_chunk_meta(fnames, chunk_mta);
+// 	int hnd = 0;
+// 	unsigned int token = 1000;
+// 	unsigned int seq = 0;
+
+// 	ucp_send_chunk(hnd, &chunk_mta, &token, &seq);
+
+// 	return 0;
+// }	
+
+
+static char* test_get_file_list()
+{
+	vector<string> flist;
+	string str("/home/yuzawataka/bin");
+	get_file_list(str, &flist);
+	for (vector<string>::iterator i = flist.begin(); i != flist.end(); i++) {
+		cout << *i << endl;
+	}
+	// gen_file_list("/home/yuzawataka/test.py", &flist);
+	// gen_file_list("/home/yuzawataka/nofile", &flist);
+	// gen_file_list("../ucp/", &flist);
+	return 0;
+}
+
 int tests_run = 0;
 
 static char * all_tests() {
-	mu_run_test(test_check_one_colon);
-	mu_run_test(test_check_remote_path);
-	mu_run_test(test_get_xattr);
-	mu_run_test(test_gen_each_meta);
-	mu_run_test(test_gen_chunk);
+	// mu_run_test(test_check_one_colon);
+	// mu_run_test(test_check_remote_path);
+	// mu_run_test(test_get_xattr);
+	// mu_run_test(test_set_xattr);
+	// mu_run_test(test_gen_each_meta);
+	// mu_run_test(test_gen_chunk);
+	// mu_run_test(test_get_xattr);
+	mu_run_test(test_gen_chunk_meta);
+	// mu_run_test(test_gen_chunk_meta_hoge);
+	// mu_run_test(test_gen_whole_chunk);
+	// mu_run_test(test_get_file_list);
 	return 0;
 }
 

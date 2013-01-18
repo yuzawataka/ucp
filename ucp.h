@@ -1,66 +1,123 @@
 #ifndef UCP_H_
 #define UCP_H_
 
+#include <msgpack.hpp>
+
 using namespace std;
 
-#define UDT_PORT "9001"
+#define UDT_PORT 9000
 
 #define UCP_METADATA_SIZE 1024
 #define UCP_CHUNK_MAX_SIZE 1024
 
 #define UCP_VERSION 0x00
+
 #define UCP_OP_AUTH 0x01
+#define UCP_OP_AUTH_ACK 0x02
+#define UCP_OP_AUTH_NCK 0x03
+#define UCP_OP_PREMETA 0x04
+#define UCP_OP_META 0x05
+#define UCP_OP_META_ACK 0x06
+#define UCP_OP_META_NCK 0x07
+#define UCP_OP_CHUNK 0x08
+#define UCP_OP_CHUNK_ACK 0x09
+#define UCP_OP_CHUNK_NCK 0x0a
+#define UCP_OP_BLOB 0x0b
+#define UCP_OP_BLOB_ACK 0x0c
+#define UCP_OP_BLOB_NCK 0x0d
+#define UCP_OP_XATR 0x0e
+#define UCP_OP_XATR_ACK 0x0f
+#define UCP_OP_XATR_NCK 0x10
+#define UCP_OP_ACK 0x11
+#define UCP_OP_NCK 0x12
+#define UCP_OP_RETRY 0x13
+#define UCP_OP_ABORT 0x14
 
-#define UCP_OP_ACK 0x03
-#define UCP_OP_NCK 0x04
-#define UCP_OP_TOKEN 0x05
-#define UCP_OP_RM2LO 0x06
-#define UCP_OP_LO2RM 0x07
+enum {
+	UCP_ERR_VERSION_UNMATCH,
+	UCP_ERR_OP_UNMATCH,
+	UCP_ERR_TOKEN_UNMATCH,
+	UCP_ERR_SEQ_UNMATCH,
+};
 
-typedef unsigned char u8;
-typedef unsigned short u16;
-typedef unsigned int u32;
-typedef unsigned long long u64;
+enum {
+	UCP_FLIST_FILE,
+	UCP_FLIST_DIR
+};
 
-typedef struct ucp_header {
-    u8 version;
-    u8 op;
-    u32 token;
-    u32 seq;
-    u64 length;
-	u32 flags;
-} ucp_header;
+#define UCP_META_TYPE_UPLOAD 0x00
+#define UCP_META_TYPE_DOWNLOAD 0x01
 
-typedef struct {
-	string id;
+struct ucp_header {
+    unsigned char version;
+    unsigned char op;
+    uint32_t token;
+    uint32_t seq;
+    uint64_t length;
+	int32_t utility;
+	unsigned char encrypt;
+	unsigned char _unused;
+} __attribute__ ((packed));
+
+// MessagePack
+struct file_info {
+    string fname;
+    uint32_t fnum;
+    uid_t uid;
+    gid_t gid;
+    mode_t mode;
+    time_t mtime;
+    uint64_t data_begin;
+    uint64_t data_end;
+    uint64_t xattr_end;
+    MSGPACK_DEFINE(fname, fnum, uid, gid, mode, mtime, data_begin, data_end, xattr_end);
+};
+
+struct chunk_meta {
+	unsigned char type;
+    uint32_t chunk_seq;
+    uint32_t file_count;
+	string user;
+	string dest_path;
+    uint64_t chunk_size;
+    list<struct file_info> finfo;
+    MSGPACK_DEFINE(chunk_seq, file_count, type, user, dest_path, chunk_size, finfo);
+};
+
+struct remote_path {
+	string name;
 	string host;
 	string path;
-} remote_path;
+};
 
-typedef struct {
-	string fname;
-	uid_t uid;
-	gid_t gid;
-	mode_t mode;
-	time_t mtime;
-	unsigned long long int data_begin;
-	unsigned long long int data_end;
-	unsigned long long int xattr_begin;
-	unsigned long long int xattr_end;
-} file_mdata;
+int ucp_send_dummy(UDTSOCKET hnd, const char *buf, size_t len);
 
-int ucp_send_dummy(UDTSOCKET hnd, const char* buf, size_t len);
+int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload);
+int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t payload_len);
 
-int ucp_send(UDTSOCKET hnd, ucp_header header, const char* payload);
-int ucp_recv(UDTSOCKET hnd, ucp_header header, char* payload, size_t payload_len);
-
-bool check_one_colon(string str);
-remote_path check_remote_path(string str);
-int gen_each_meta(string fname, unsigned long long int chunk_offset, file_mdata* fm);
+bool check_one_colon(string& str);
+remote_path check_remote_path(string& str);
+int64_t gen_each_meta(string fname, uint32_t fnum, uint64_t chunk_offset,
+					  file_info* fi, msgpack::sbuffer* sbuf);
 int gen_chunk(vector<string> fnames, string tmpfname);
-int get_xattr(string fname, map<string, string>* attr);
+int gen_whole_chunk(vector<string> fnames, chunk_meta *chunk_mta, string tmpfname);
+int get_xattr(string fname, msgpack::sbuffer* sbuf);
+int set_xattr(char *fname, map<string, string>* xattrs);
+int set_attr(char *fname, struct file_info* finfo);
+int gen_chunk_meta(vector<string>& flist, remote_path& rp, chunk_meta& chunk_mta);
+void gen_ucp_header(struct ucp_header* hdr, unsigned char op, uint32_t token, uint32_t seq, 
+					uint64_t length, int32_t utility);
+int check_ucp_header(struct ucp_header hdr, unsigned char op, uint32_t token, uint32_t seq);
+int ucp_send_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence);
+int ucp_recv_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence);
+
+int64_t ucp_send_file(UDTSOCKET hnd, string fname, uint64_t chunk_len, int32_t token, int32_t sequence);
+int64_t ucp_recv_file(UDTSOCKET hnd, string fname, uint64_t chunk_len, int32_t token, int32_t sequence);
+int64_t ucp_send_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence);
+int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence);
 
 void udt_status(UDTSOCKET s);
+void show_ucp_header(struct ucp_header hdr);
 
-
+int get_file_list(string& fname, vector<string>* flist);
 #endif
