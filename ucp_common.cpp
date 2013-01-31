@@ -12,6 +12,7 @@
 #include <vector>
 #include <sys/mman.h>
 #include <fcntl.h>
+#include <error.h>
 #include <udt.h>
 #include "ucp.h"
 #include <msgpack.hpp>
@@ -28,7 +29,7 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
     int rc;
     size_t buffer_len;
     void *buffer;
-    
+	UDT::TRACEINFO trace;
     buffer_len = sizeof(struct ucp_header) + header->length;
     buffer = malloc(buffer_len);
 	if (buffer == NULL) {
@@ -42,6 +43,7 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
 		memcpy((char*)buffer + sizeof(struct ucp_header), payload, header->length);
 
     // rc = UDT::send(hnd, (const char*)buffer, buffer_len, -1);
+	UDT::perfmon(hnd, &trace);
 	int64_t send_sz = 0;
 	while (buffer_len > send_sz) {
 		rc =  UDT::send(hnd, (char*)buffer + send_sz, buffer_len - send_sz, -1);
@@ -51,6 +53,8 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
 		}
 		send_sz += rc;
 	}
+	UDT::perfmon(hnd, &trace);
+
 #ifdef __DEBUG
 	cout << "====== ucp_send ======" << endl;
 	cout << "send_sz: " << send_sz << ", payload_len: " << header->length << ", hdr_sz: " << sizeof(ucp_header) << endl;
@@ -73,6 +77,7 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
     int rc;
     size_t buffer_len;
 	void *buffer;
+	UDT::TRACEINFO trace;
     buffer_len = sizeof(struct ucp_header) + payload_len;
     buffer = malloc(buffer_len);
 	if (buffer == NULL) {
@@ -86,6 +91,7 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
     //     return -1;
     // } 
 
+	UDT::perfmon(hnd, &trace);
 	int64_t recv_sz = 0;
 	while (buffer_len > recv_sz) {
 		rc =  UDT::recv(hnd, (char*)buffer + recv_sz, buffer_len - recv_sz, -1);
@@ -95,7 +101,7 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
 		}
 		recv_sz += rc;
 	}
-
+	UDT::perfmon(hnd, &trace);
 
 	memcpy(header, buffer, sizeof(struct ucp_header));
 	// mmap()
@@ -112,6 +118,33 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
 	return 0;
 }
 
+void udt_trace(UDT::TRACEINFO& trace)
+{
+	cout << "+--------------------------------+" << endl;
+	cout << "|pktSentTotal: " << trace.pktSentTotal << endl;
+	cout << "|pktRecvTotal: " << trace.pktRecvTotal << endl;
+	cout << "|pktSndLossTotal: " << trace.pktSndLossTotal << endl;
+	cout << "|pktRcvLossTotal: " << trace.pktRcvLossTotal << endl;
+	cout << "|pktRetransTotal: " << trace.pktRetransTotal << endl;
+	cout << "+--------------------------------+" << endl;
+	cout << "|pktSent: " << trace.pktSent << endl;
+	cout << "|pktRecv: " << trace.pktRecv << endl;
+	cout << "|pktSndLoss: " << trace.pktSndLoss << endl;
+	cout << "|pktRcvLoss: " << trace.pktRcvLoss << endl;
+	cout << "|pktRetrans: " << trace.pktRetrans << endl;
+	cout << "|mbpsSendRate: " << trace.mbpsSendRate << endl;
+	cout << "|mbpsRecvRate: " << trace.mbpsRecvRate << endl;
+	cout << "+--------------------------------+" << endl;
+	cout << "|usPktSndPeriod: " << trace.usPktSndPeriod << endl;
+	cout << "|pktFlowWindow: " << trace.pktFlowWindow << endl;
+	cout << "|pktCongestionWindow: " << trace.pktCongestionWindow << endl;
+	cout << "|pktFlightSize: " << trace.pktFlightSize << endl;
+	cout << "|msRTT: " << trace.msRTT << endl;
+	cout << "|mbpsBandwidth: " << trace.mbpsBandwidth << endl;
+	cout << "|byteAvailSndBuf: " << trace.byteAvailSndBuf << endl;
+	cout << "|byteAvailRcvBuf: " << trace.byteAvailRcvBuf << endl;
+	cout << "+--------------------------------+" << endl;
+}
 
 int ucp_send_dummy(UDTSOCKET hnd, const char *buf, size_t len)
 {
@@ -290,9 +323,9 @@ int64_t gen_each_meta(string fname, uint32_t fnum, uint64_t chunk_offset, file_i
 	char *list;
 	size_t size;
 	ssize_t attr_size;
+	int64_t datum_sz;
 	if (stat(fname.c_str(), &fs) == -1)
 		return -1;
-	attr_size = get_xattr(fname, sbuf);
 	fi->fname = fname;
 	fi->fnum = fnum;
 	fi->uid = fs.st_uid;
@@ -300,21 +333,17 @@ int64_t gen_each_meta(string fname, uint32_t fnum, uint64_t chunk_offset, file_i
 	fi->mode = fs.st_mode;
 	fi->mtime = fs.st_mtime;
 	fi->data_begin = chunk_offset;
-	fi->data_end = fi->data_begin + fs.st_size;
-	fi->xattr_end = fi->data_end + attr_size;
-#ifdef __DEBUG
-	cout << "fnum: " << fi->fnum << endl;
-	cout << "fname: " << fi->fname << endl;
-	cout << "uid: " << fi->uid << endl;
-	cout << "gid: " << fi->gid << endl;
-	cout << "mode: " << fi->mode << endl;
-	cout << "mtime: " << fi->mtime << endl;
-	cout << "data_begin: " << fi->data_begin << endl;
-	cout << "data_end: " << fi->data_end << endl;
-	cout << "xattr_end: " << fi->xattr_end << endl;
-	cout << "------------------" << endl;
-#endif
-	return fs.st_size + attr_size;
+	if (is_directory(fname)) {
+		fi->data_end = fi->data_begin;
+		fi->xattr_end = fi->data_end;
+		datum_sz = 0;
+	} else {
+		attr_size = get_xattr(fname, sbuf);
+		fi->data_end = fi->data_begin + fs.st_size;
+		fi->xattr_end = fi->data_end + attr_size;
+		datum_sz = fs.st_size + attr_size;
+	}
+	return datum_sz;
 }
 
 int gen_chunk_mmap(vector<string> fnames, int ofd)
@@ -393,6 +422,21 @@ int gen_chunk_meta(vector<string>& flist, struct remote_path& rp, struct chunk_m
 	chunk_mta.chunk_size = len;
 	return 0;
 }	
+
+int update_chunk_meta(chunk_meta& chunk_mta, string& dest_path, int overwrite)
+{
+	int rc = 0;
+	for (list<file_info>::iterator i = chunk_mta.finfo.begin(); i != chunk_mta.finfo.end(); ++i) {
+		if (overwrite) {
+			i->fname = dest_path;
+		} else {
+			string prefix(dest_path + string("/"));
+			i->fname = prefix.append(i->fname);
+		}
+		++rc;
+	}
+	return rc;
+}
 
 int gen_request_meta(string fname, struct chunk_meta *chunk_mta)
 {
@@ -496,29 +540,61 @@ int get_xattr(string fname, msgpack::sbuffer* sbuf)
 	return sbuf->size();
 }
 
-int set_xattr(char *fname, map<string, string>* xattrs)
+int set_xattr(char* fname, map<string, string>& xattrs)
 {
 	int rc;
-	for (map<string, string>::iterator i = xattrs->begin(); i != xattrs->end(); i++) {
+	errno = 0;
+	for (map<string, string>::iterator i = xattrs.begin(); i != xattrs.end(); i++) {
+		char *cwd;
+		cwd = getcwd(NULL, 0);
 		rc = setxattr(fname, i->first.c_str(), i->second.c_str(), i->second.size(), XATTR_REPLACE);
+		cout << "setxattr rc: " << rc << ", errno: " << errno << ", Current work dir: " << cwd << ", fname: " << fname << ", name: " << i->first.c_str() << ", value: " << i->second.c_str() << ", size:" << i->second.size() << endl;
+		switch (errno) {
+		case EEXIST:
+			cout << fname << " has already extended attributes." << endl;
+			break;
+		case ENOSPC:
+			cout << "No space for set extended attributes." << endl;
+			break;
+		case EDQUOT:
+			cout << "No space for set extended attributes by quota." << endl;
+			break;
+		case ENOTSUP:
+			cout << "Filesystem doesn't support extended attributes." << endl;
+			break;
+		default:
+			cout << strerror(errno) << endl;
+			break;
+		}
+		free(cwd);
 	}
 	return rc;
 }
 
-int set_attr(char *fname, struct file_info* finfo)
+int set_attr_rename(char *fname, struct file_info* finfo)
 {
-	int rc = 0;
+	errno = 0;
 	struct utimbuf times;
 	times.actime = finfo->mtime;
 	times.modtime = finfo->mtime;
 
-	if (chown(fname, finfo->uid, finfo->gid) != 0)
+	if (chown(fname, finfo->uid, finfo->gid) != 0) {
+		cout << "set_attr: " << strerror(errno) << endl;
 		return -1;
-	if (chmod(fname, finfo->mode) != 0)
+	}
+	if (chmod(fname, finfo->mode) != 0) {
+		cout << "set_attr: " << strerror(errno) << endl;
 		return -1;
-	if (utime(fname, &times) != 0)
+	}
+	if (utime(fname, &times) != 0) {
+		cout << "set_attr: " << strerror(errno) << endl;
 		return -1;
-	// rc = rename(fname, finfo->fname.c_str());
+	}
+	if (rename(fname, finfo->fname.c_str()) != 0) {
+		cout << "set_attr: " << strerror(errno) << endl;
+		return -1;
+	}
+	return 0;
 }
 
 void gen_ucp_header(struct ucp_header* hdr, unsigned char op, uint32_t token, uint32_t seq,
@@ -681,6 +757,7 @@ int get_file_list(string& fname, vector<string>* flist)
 		return 0;
 	}
 	if (is_directory(fname)) {
+		flist->push_back(fname);
 		recursive_directory_iterator i = recursive_directory_iterator(fname);
 		recursive_directory_iterator end = recursive_directory_iterator();
 		for (; i != end; ++i) {
@@ -721,6 +798,9 @@ int ucp_send_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int*
 	seq++;
 	if ((rc = check_ucp_header(hdr1, UCP_OP_ACK, tok, seq)) != 0) {
 		cout << "ucp_send_metadata: recv0 NG (rc=" << rc << ")" << endl;
+		ucp_header hdr;
+		gen_ucp_header(&hdr, UCP_OP_ABORT, tok, seq, 0, 1);
+		rc = ucp_send(hnd, &hdr, NULL);
 		return -1;
 	}
 	cout << "ucp_send_metadata 1: " << metadata_sz << endl; 
@@ -746,6 +826,9 @@ int ucp_send_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int*
 	memcpy(sequence, &seq, sizeof(int));
 
 	return rc;
+
+UCP_ABORT:
+	return -1;
 }
 
 int ucp_recv_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence)
@@ -827,6 +910,9 @@ int ucp_recv_metadata(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int*
 	memcpy(sequence, &seq, sizeof(int));
 
 	return rc;
+
+UCP_ABORT:
+	return -1;
 }
 
 int64_t ucp_send_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence)
@@ -843,60 +929,27 @@ int64_t ucp_send_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 		cout << "Sending... " << i->fname.c_str() << endl;
 		struct ucp_header hdr0;
 		memset((void*)&hdr0, 0, sizeof(struct ucp_header));
-
 		if (access(i->fname.c_str(), R_OK) != 0) {
 			cout << i->fname << " is not found, or can't access." << endl;
 			return -1;
 		}
-		// sending file chunk
-		fstream ifs(i->fname.c_str(), ios::in | ios::binary);
-		int64_t offset = 0;
+		if (S_ISDIR(i->mode)) {
+			cout <<  i->fname << " is dir." << endl;
+		} else {
+			cout <<  i->fname << " is file." << endl;
+			// sending file chunk
+			fstream ifs(i->fname.c_str(), ios::in | ios::binary);
+			int64_t offset = 0;
 #ifndef TEST
-		if (UDT::ERROR == (rc = UDT::sendfile(hnd, ifs, offset, i->data_end - i->data_begin))) {
-			cout << "ucp_send_chunk failed. " << UDT::getlasterror().getErrorMessage() << " recv: " << rc << endl;
-			return -1;
-		}
-		send_sz += rc;
-		// Recv BLOB_ACK or BLOB_NCK
-		seq++;
-		rc = ucp_recv(hnd, &hdr0, NULL, 0);
-		if (check_ucp_header(hdr0, UCP_OP_BLOB_ACK, tok, seq) != 0) {
-			cout << "ucp_send_chunk: recv0 NG (rc=" << rc << ")" << endl;
-			switch (rc) {
-			case UCP_ERR_VERSION_UNMATCH:
-				cout << " UCP_ERR_VERSION_UNMATCH" << endl;
-				break;
-			case UCP_ERR_OP_UNMATCH:
-				cout << " UCP_ERR_OP_UNMATCH" << endl;
-				break;
-			case UCP_ERR_TOKEN_UNMATCH:
-				cout << " UCP_ERR_TOKEN_UNMATCH" << endl;
-				break;
-			case UCP_ERR_SEQ_UNMATCH:
-				cout << " UCP_ERR_SEQ_UNMATCH" << endl;
-				break;
-			}
-			return -1;
-		}
-		if (i->fnum != ntohl(hdr0.utility)) {
-			cout << "File number unmatch(blob)." << "(" << i->fnum << "|" << ntohl(hdr0.utility) << endl;
-			return -1;
-		}
-#endif
-		// sending extended attributes
-		if (i->data_end != i->xattr_end) {
-			struct ucp_header hdr1;
-			memset((void*)&hdr1, 0, sizeof(struct ucp_header));
-			msgpack::sbuffer sbuf;
-			rc = get_xattr(i->fname, &sbuf);
-			cout << "xattr(" << rc << ","<< sbuf.size() << "): " << sbuf.data() << endl;
-#ifndef TEST
-			if (rc =  UDT::send(hnd, (char*)(sbuf.data()), sbuf.size(), -1))
+			if (UDT::ERROR == (rc = UDT::sendfile(hnd, ifs, offset, i->data_end - i->data_begin))) {
+				cout << "ucp_send_chunk failed. " << UDT::getlasterror().getErrorMessage() << " recv: " << rc << endl;
 				return -1;
-			// Recv XATR_ACK or XATR_NCK
+			}
+			send_sz += rc;
+			// Recv BLOB_ACK or BLOB_NCK
 			seq++;
-			rc = ucp_recv(hnd, &hdr1, NULL, 0);
-			if (check_ucp_header(hdr1, UCP_OP_XATR_ACK, tok, seq) != 0) {
+			rc = ucp_recv(hnd, &hdr0, NULL, 0);
+			if (check_ucp_header(hdr0, UCP_OP_BLOB_ACK, tok, seq) != 0) {
 				cout << "ucp_send_chunk: recv0 NG (rc=" << rc << ")" << endl;
 				switch (rc) {
 				case UCP_ERR_VERSION_UNMATCH:
@@ -914,12 +967,49 @@ int64_t ucp_send_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 				}
 				return -1;
 			}
-			if (i->fnum != ntohl(hdr1.utility)) {
-				cout << "File number unmatch(xattr)." << "(" << i->fnum << "|" << ntohl(hdr1.utility) << endl;
+			if (i->fnum != ntohl(hdr0.utility)) {
+				cout << "File number unmatch(blob)." << "(" << i->fnum << "|" << ntohl(hdr0.utility) << endl;
 				return -1;
 			}
-			send_sz += rc;
 #endif
+			// sending extended attributes
+			if (i->data_end != i->xattr_end) {
+				struct ucp_header hdr1;
+				memset((void*)&hdr1, 0, sizeof(struct ucp_header));
+				msgpack::sbuffer sbuf;
+				rc = get_xattr(i->fname, &sbuf);
+				cout << "xattr(" << rc << ","<< sbuf.size() << "): " << sbuf.data() << endl;
+#ifndef TEST
+				if (rc =  UDT::send(hnd, (char*)(sbuf.data()), sbuf.size(), -1))
+					return -1;
+				// Recv XATR_ACK or XATR_NCK
+				seq++;
+				rc = ucp_recv(hnd, &hdr1, NULL, 0);
+				if (check_ucp_header(hdr1, UCP_OP_XATR_ACK, tok, seq) != 0) {
+					cout << "ucp_send_chunk: recv0 NG (rc=" << rc << ")" << endl;
+					switch (rc) {
+					case UCP_ERR_VERSION_UNMATCH:
+						cout << " UCP_ERR_VERSION_UNMATCH" << endl;
+						break;
+					case UCP_ERR_OP_UNMATCH:
+						cout << " UCP_ERR_OP_UNMATCH" << endl;
+						break;
+					case UCP_ERR_TOKEN_UNMATCH:
+						cout << " UCP_ERR_TOKEN_UNMATCH" << endl;
+						break;
+					case UCP_ERR_SEQ_UNMATCH:
+						cout << " UCP_ERR_SEQ_UNMATCH" << endl;
+						break;
+					}
+					return -1;
+				}
+				if (i->fnum != ntohl(hdr1.utility)) {
+					cout << "File number unmatch(xattr)." << "(" << i->fnum << "|" << ntohl(hdr1.utility) << endl;
+					return -1;
+				}
+				send_sz += rc;
+#endif
+			}
 		}
 	}
 	if (chunk_mta->chunk_size != send_sz) {
@@ -954,6 +1044,9 @@ int64_t ucp_send_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 	memcpy(sequence, &seq, sizeof(int));
 
 	return rc;
+
+UCP_ABORT:
+	return -1;
 }
 
 int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int* token, unsigned int* sequence)
@@ -970,62 +1063,66 @@ int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 		cout << "Receiving... " << i->fname.c_str() << endl;
 		struct ucp_header hdr0;
 		memset((void*)&hdr0, 0, sizeof(struct ucp_header));
-
-		char* tmpfile;
-		char tmp_sfx[] = ".XXXXXX";
-		tmpfile = (char*)malloc(i->fname.size() + strlen(tmp_sfx) + 1);
-		strcpy(tmpfile, i->fname.c_str());
-		strcpy(tmpfile + i->fname.size(), tmp_sfx);
-		mkstemp(tmpfile);
-		fstream ofs(tmpfile, ios::out | ios::binary | ios::trunc);
-		int64_t offset = 0;
-
-		// receiving file chunk	
-		if (UDT::ERROR == (rc = UDT::recvfile(hnd, ofs, offset, i->data_end - i->data_begin))){
-			cout << "ucp_recv_chunk failed. " << UDT::getlasterror().getErrorMessage() << " recv: " << rc << endl;
-			return -1;
-		}
-		ofs.close();
-		cout << "recv_sz(file): " << rc << endl;
-		recv_sz += rc;
-		cout << "chunk: " << tmpfile << endl;
-		// Send BLOB_ACK or BLOB_NCK
-		seq++;
-		gen_ucp_header(&hdr0, UCP_OP_BLOB_ACK, tok, seq, 0, i->fnum);
-		rc = ucp_send(hnd, &hdr0, NULL);
-
-		// receiving extended attributes
-		if (i->data_end != i->xattr_end) {
-			struct ucp_header hdr1;
-			memset((void*)&hdr1, 0, sizeof(struct ucp_header));
-
-			char* xattrs_buf;
-			map<string, string> xattrs;
-			msgpack::unpacked msg;
-			msgpack::object obj;
-
-			xattrs_buf = (char*)malloc(i->xattr_end - i->data_end);
-			rc =  UDT::recv(hnd, xattrs_buf, i->xattr_end - i->data_end, -1);
-			cout << "recv_sz(xattr): " << rc << endl;
-			recv_sz += rc;
-			msgpack::unpack(&msg, (const char*)xattrs_buf, i->xattr_end - i->data_end);
-			obj = msg.get();
-			cout << "xattrs: " << obj << endl;
-			obj.convert(&xattrs);
-			if (xattrs_buf != NULL)
-				free(xattrs_buf);
-			if (set_xattr(tmpfile, &xattrs) != 0)
+		if (S_ISDIR(i->mode)) {
+			cout <<  i->fname << " is dir." << endl;
+		} else {
+			cout <<  i->fname << " is file." << endl;
+			char* tmpfile;
+			char tmp_sfx[] = ".XXXXXX";
+			tmpfile = (char*)malloc(i->fname.size() + strlen(tmp_sfx) + 1);
+			strcpy(tmpfile, i->fname.c_str());
+			strcpy(tmpfile + i->fname.size(), tmp_sfx);
+			mkstemp(tmpfile);
+			fstream ofs(tmpfile, ios::out | ios::binary | ios::trunc);
+			int64_t offset = 0;
+			
+			// receiving file chunk	
+			if (UDT::ERROR == (rc = UDT::recvfile(hnd, ofs, offset, i->data_end - i->data_begin))){
+				cout << "ucp_recv_chunk failed. " << UDT::getlasterror().getErrorMessage() << " recv: " << rc << endl;
 				return -1;
-			// Sending XATR_ACK or XATR_NCK
+			}
+			ofs.close();
+			cout << "recv_sz(file): " << rc << endl;
+			recv_sz += rc;
+			cout << "chunk: " << tmpfile << endl;
+			// Send BLOB_ACK or BLOB_NCK
 			seq++;
-			gen_ucp_header(&hdr1, UCP_OP_XATR_ACK, tok, seq, 0, i->fnum);
-			rc = ucp_send(hnd, &hdr1, NULL);
+			gen_ucp_header(&hdr0, UCP_OP_BLOB_ACK, tok, seq, 0, i->fnum);
+			rc = ucp_send(hnd, &hdr0, NULL);
+			
+			// receiving extended attributes
+			if (i->data_end != i->xattr_end) {
+				struct ucp_header hdr1;
+				memset((void*)&hdr1, 0, sizeof(struct ucp_header));
+				
+				char* xattrs_buf;
+				map<string, string> xattrs;
+				msgpack::unpacked msg;
+				msgpack::object obj;
+				
+				xattrs_buf = (char*)malloc(i->xattr_end - i->data_end);
+				rc =  UDT::recv(hnd, xattrs_buf, i->xattr_end - i->data_end, -1);
+				cout << "recv_sz(xattr): " << rc << endl;
+				recv_sz += rc;
+				msgpack::unpack(&msg, (const char*)xattrs_buf, i->xattr_end - i->data_end);
+				obj = msg.get();
+				cout << "xattrs: " << obj << endl;
+				obj.convert(&xattrs);
+				if (xattrs_buf != NULL)
+					free(xattrs_buf);
+				if (set_xattr(tmpfile, xattrs) != 0) {
+					return -1;
+				}
+				// Sending XATR_ACK or XATR_NCK
+				seq++;
+				gen_ucp_header(&hdr1, UCP_OP_XATR_ACK, tok, seq, 0, i->fnum);
+				rc = ucp_send(hnd, &hdr1, NULL);
+			}
+			if (set_attr_rename(tmpfile, &*i) != 0)
+				return -1;
+			if (tmpfile != NULL)
+				free(tmpfile);
 		}
-		if (set_attr(tmpfile, &*i) != 0)
-			return -1;
-		// rename tempfile to dest file
-		if (tmpfile != NULL)
-			free(tmpfile);
 	}
 	if (chunk_mta->chunk_size != recv_sz) {
 		cout << "recv_sz is unmatched." << endl;
@@ -1042,6 +1139,9 @@ int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 	memcpy(sequence, &seq, sizeof(int));
 
 	return rc;
+
+UCP_ABORT:
+	return -1;
 }
 
 int64_t ucp_send_file(UDTSOCKET hnd, string fname, uint64_t chunk_len, int token, int seq)

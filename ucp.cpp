@@ -13,6 +13,7 @@ ucp - UDT based remote file copy
 #include <sys/stat.h>
 #include <netdb.h>
 #include <librsync.h>
+#include <errno.h>
 #include "udt.h"
 #include "ucp.h"
 
@@ -20,6 +21,8 @@ static int local_to_remote(UDTSOCKET hnd, unsigned int* token,
 						   unsigned int* sequence, vector<string>& fnames, remote_path& rp);
 static int remote_to_local(UDTSOCKET hnd, unsigned int* token, 
 						   unsigned int* sequence, vector<string>& fnames, remote_path& rp);
+static void show_usage();
+
 using namespace std;
 
 #ifdef TEST
@@ -32,11 +35,16 @@ int main(int argc, char* argv[])
 	int port = 0;
 	bool encryption;
 
+	if (argc <= 1) {
+		show_usage();
+		exit(EXIT_SUCCESS);
+	}
+
 	while((opt = getopt(argc,argv,"hvdep:")) !=-1) {
 		switch(opt){
 		case 'h':
-			// show_usage();
-			break;
+			show_usage();
+			exit(EXIT_SUCCESS);
 		case 'v':
 			break;
 		case 'd':
@@ -51,40 +59,37 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	// for (int i = 0; i < argc; i++)
-	// 	cout << "argv[" << i << "]: " << argv[i] << endl;
-
 	int first = optind;
 	int last = argc - 1;
-	// for (first = optind; optind < argc; optind++)
-	// 	last = optind;
 
 	string first_f(argv[first]);
 	string last_f(argv[last]);
 
 	remote_path rp;
 	bool remote_local;
-	string fn_entry;
+	vector<string> fn_entries;
 	vector<string> flist;
 
 	if (check_one_colon(first_f) && check_one_colon(last_f)) {
-		cout << "invalid" << endl;
-		exit(1);
+		cout << "Invalid: <" << first_f << "> and <" << last_f << "> are also remote path."  << endl;
+		exit(EXIT_FAILURE);
 	} else if (check_one_colon(first_f)) {
 		remote_local = true;
 		rp = check_remote_path(first_f);
 		cout << "Not Implemented." << endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	} else if (check_one_colon(last_f)) {
 		remote_local = false;
 		rp = check_remote_path(last_f);
-		fn_entry = argv[2];
+		for (int i = first; i < last; ++i) {
+			fn_entries.push_back(argv[i]);
+		}
 	} else {
-		cout << "invalid" << endl;
-		exit(1);
+		cout << "Invalid" << endl;
+		exit(EXIT_FAILURE);
 	}
 
-    int rc, errno;
+    int rc;
     struct addrinfo hints, *peer;
     struct ucp_header header;
     char tid = 0;
@@ -120,7 +125,6 @@ int main(int argc, char* argv[])
         cout << "connect: " << UDT::getlasterror().getErrorMessage() << endl;
         return -1;
     }
-
 	freeaddrinfo(peer);
 
 	srand(time(NULL));
@@ -146,17 +150,27 @@ int main(int argc, char* argv[])
 		cout << "remote->local  name: " << rp.name << ", host: " << rp.host << ", path: " << rp.path << endl;
 		remote_to_local(hnd, &token, &sequence, flist, rp);
 	} else{
-		if (get_file_list(fn_entry, &flist) != 0) {
-			cout << fn_entry << " is not found." << endl;
-			exit(1);
+		for (vector<string>::iterator i = fn_entries.begin(); i != fn_entries.end(); ++i) {
+			if (get_file_list(*i, &flist) != 0) {
+				cout << *i << " is not found." << endl;
+				goto UCP_ABORT;
+			}
 		}
 		cout << "local->remote  name: " << rp.name << ", host: " << rp.host << ", path: " << rp.path << endl;
-		local_to_remote(hnd, &token, &sequence, flist, rp);
+		rc = local_to_remote(hnd, &token, &sequence, flist, rp);
+		if (rc != 0)
+			goto UCP_ABORT;
 		cout << "2: token: " << token << ", seq: " << sequence << endl;
 	}
+
 	UDT::close(hnd);
     UDT::cleanup();
-    return 0;
+	exit(EXIT_SUCCESS);
+
+UCP_ABORT:
+	UDT::close(hnd);
+    UDT::cleanup();
+	exit(EXIT_FAILURE);
 }
 
 static int local_to_remote(UDTSOCKET hnd, unsigned int* token, unsigned int* sequence, vector<string>& flist, remote_path& rp)
@@ -174,6 +188,7 @@ static int local_to_remote(UDTSOCKET hnd, unsigned int* token, unsigned int* seq
 		cout << "Sending chunk failed." << endl;
 		return -1;
 	}
+	return 0;
 }
 
 static int remote_to_local(UDTSOCKET hnd, unsigned int* token, unsigned int* sequence, vector<string>& fnames, remote_path& rp)
@@ -194,14 +209,16 @@ static int remote_to_local(UDTSOCKET hnd, unsigned int* token, unsigned int* seq
 		cout << "Receiving chunk failed." << endl;
 		return -1;
 	}
+	return 0;
 }
 
 
-void show_usage(void) 
+static void show_usage() 
 {
-	cout << "-v version" << endl;
-	cout << "-d debug" << endl;
-	cout << "-e encription" << endl;
-	cout << "-p port UDT_port" << endl;
-	cout << "-h show this usage." << endl;
+	cout << "ucp [-dep] src dst" << endl;
+	cout << "     -v version" << endl;
+	cout << "     -d debug" << endl;
+	cout << "     -e encription" << endl;
+	cout << "     -p ucpd's port" << endl;
+	cout << "     -h show this usage." << endl;
 }

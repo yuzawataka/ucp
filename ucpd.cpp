@@ -11,6 +11,7 @@
 #include <pwd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <syslog.h>
 #include "ucp.h"
 // #include <boost/filesystem/path.hpp>
 // #include <boost/filesystem/operations.hpp>
@@ -28,13 +29,17 @@ static void* dispatch(UDTSOCKET hnd);
 static void* dispatch(void *usock);
 #endif
 
+int exists(string& path);
 int is_dir(string& path);
 int is_file(string& path);
+int get_parent_path(string& path, string& parent_path);
+int trim(string& str, string& trimed);
 
 int main(int argc, char* argv[])
 {
 	int opt;
 	int port = 0;
+	int do_daemon = 1;
 	while((opt = getopt(argc,argv,"hvdp:")) !=-1) {
 		switch(opt){
 		case 'h':
@@ -43,6 +48,7 @@ int main(int argc, char* argv[])
 		case 'v':
 			break;
 		case 'd':
+			do_daemon = 0;
 			break;
 		case 'p':
 			port = atoi(optarg);
@@ -68,19 +74,19 @@ int main(int argc, char* argv[])
 
 	if (getaddrinfo(NULL, service.c_str(), &hints, &res) != 0) {
         cout << "" << endl;
-        return 1;
+        exit(EXIT_FAILURE);
     }
     UDTSOCKET srv = UDT::socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     
     if (UDT::ERROR == UDT::bind(srv, res->ai_addr, res->ai_addrlen)) {
         cout << "bind: " << UDT::getlasterror().getErrorMessage() << endl;
-        return 0;
+        exit(EXIT_FAILURE);
     }
     freeaddrinfo(res);
     
     if (UDT::ERROR == UDT::listen(srv, 10)) {
         cout << "listen: " << UDT::getlasterror().getErrorMessage() << endl;
-        return 0;
+        exit(EXIT_FAILURE);
     }
 	cout << "Listen fd = " << srv << endl;
 
@@ -107,6 +113,9 @@ int main(int argc, char* argv[])
                 UDT::epoll_add_usock(ep, hnd);
 			} else {
 				cout << "received: " << *i << endl;
+				char* home;
+				home = getenv("HOME");
+				chdir(home);
 				dispatch(*i);
 			}
 		}
@@ -170,6 +179,8 @@ static void* dispatch(void *usock)
 	cout << "1: token: " << token << ", seq: " << sequence << endl;
 
 	rc = ucp_recv_metadata(hnd, &chunk_mta, &token, &sequence);
+	if (rc == -1)
+		goto UCPD_ABANDON;
 
 	if (chunk_mta.type == UCP_META_TYPE_UPLOAD) {
 		cout << "Going to Upload." << endl; 
@@ -189,81 +200,60 @@ static void* dispatch(void *usock)
 		if (result == NULL) {
 			if (rc == 0) {
 				cout << chunk_mta.user << " is not found." << endl;
-				UDT::close(hnd);
-				return NULL;
+				goto UCPD_ABANDON;
 			}
 		}
+
+		cout << "pw_dir:" << pw.pw_dir << endl;
 
 		string dest_path;
-		if (chunk_mta.dest_path.empty())
-			dest_path = pw.pw_dir;
-		if (chunk_mta.dest_path.find_first_not_of("/", 0) == 0) {
-			dest_path = chunk_mta.dest_path;
+		if (chunk_mta.dest_path.empty()) {
+			dest_path = string(pw.pw_dir);
 		} else {
-			dest_path = pw.pw_dir + '/' + chunk_mta.dest_path;
-		}
-
-		if (!access(dest_path.c_str(), F_OK) && chunk_mta.file_count <= 1) {
-			cout << "only one new file write" << endl;
-//			chdir(dest_path.parent_path().c_str());
-		}
-		if (!access(dest_path.c_str(), F_OK) && chunk_mta.file_count > 1) {
-			cout << "Error. No such directory" << endl;
-			UDT::close(hnd);
-			return NULL;
-		}
-
-		if (access(dest_path.c_str(), F_OK) && is_dir(dest_path)) {
-			cout << "files write under directory" << endl;
-			chdir(dest_path.c_str());
-		}
-		if (access(dest_path.c_str(), F_OK) && is_file(dest_path)) {
-			if (chunk_mta.file_count <= 1) {
-				cout << "only one file overwrite" << endl;
-//				chdir(dest_path.parent_path().c_str());
+			if (chunk_mta.dest_path.find("/", 0) == 0) {
+				dest_path = chunk_mta.dest_path;
 			} else {
-				cout << "Error. Src many, Dst one" << endl;
-				UDT::close(hnd);
-				return NULL;
+				dest_path = string(pw.pw_dir) + string("/") + chunk_mta.dest_path;
 			}
 		}
 
-
-		// dest_path = chunk_mta.dest_path;
-		// if (!dest_path.is_absolute()) {
-		// 	path home_path(pw.pw_dir);
-		// 	dest_path = absolute(dest_path, home_path);
-		// }
-
-		// if (!exists(dest_path) && chunk_mta.file_count <= 1) {
-		// 	cout << "only one new file write" << endl;
-		// 	chdir(dest_path.parent_path().c_str());
-		// }
-		// if (!exists(dest_path) && chunk_mta.file_count > 1) {
-		// 	cout << "Error. No such directory" << endl;
-		// 	UDT::close(hnd);
-		// 	return NULL;
-		// }
-		// if (exists(dest_path) && is_directory(dest_path)) {
-		// 	cout << "files write under directory" << endl;
-		// 	chdir(dest_path.c_str());
-		// }
-		// if (exists(dest_path) && is_regular_file(dest_path)) {
-		// 	if (chunk_mta.file_count <= 1) {
-		// 		cout << "only one file overwrite" << endl;
-		// 		chdir(dest_path.parent_path().c_str());
-		// 	} else {
-		// 		cout << "Error. Src many, Dst one" << endl;
-		// 		UDT::close(hnd);
-		// 		return NULL;
-		// 	}
-		// }
+		if (exists(dest_path)) {
+			if (is_dir(dest_path)) {
+				cout << "files write under directory" << endl;
+				update_chunk_meta(chunk_mta, dest_path, 0);
+			} else {
+				if (chunk_mta.file_count <= 1) {
+					cout << "only one file overwrite" << endl;
+					update_chunk_meta(chunk_mta, dest_path, 1);
+				} else {
+					cout << "Error. Src many, Dst one" << endl;
+					if (buf != NULL)
+						free(buf);
+					goto UCPD_ABANDON;
+				}
+			}
+		} else {
+			if (chunk_mta.file_count <= 1) {
+				cout << "only one new file write" << endl;
+				update_chunk_meta(chunk_mta, dest_path, 1);
+			} else {
+				cout << "Error. No such directory" << endl;
+				if (buf != NULL)
+					free(buf);
+				goto UCPD_ABANDON;
+			}
+		}
 
 		cout << "dest_path: " << dest_path << endl;
 		cout << "2: token: " << token << ", seq: " << sequence << endl;
 
-		ucp_recv_chunk(hnd, &chunk_mta, &token, &sequence);
+		rc = ucp_recv_chunk(hnd, &chunk_mta, &token, &sequence);
 		cout << "rc: " << rc << endl;
+		if (rc == -1) {
+			if (buf != NULL)
+				free(buf);
+			goto UCPD_ABANDON;
+		}
 		if (buf != NULL)
 			free(buf);
 		UDT::close(hnd);
@@ -274,15 +264,33 @@ static void* dispatch(void *usock)
 		UDT::close(hnd);
 	}
 	return NULL;
+
+UCPD_ABANDON:
+	UDT::close(hnd);
+	return NULL;
+}
+
+int exists(string& path)
+{
+	int rc;
+	errno = 0;
+	struct stat fs;
+	rc = stat(path.c_str(), &fs);
+	if (rc != 0)
+		return 0;
+	return 1;
 }
 
 int is_dir(string& path)
 {
 	int rc;
+	errno = 0;
 	struct stat fs;
 	rc = stat(path.c_str(), &fs);
-	if (rc == -1)
+	if (rc == -1) {
+		cout << "is_dir: " << strerror(errno) << endl;
 		return -1;
+	}
 	if (S_ISDIR(fs.st_mode))
 		return 1;
 	return 0;
@@ -291,11 +299,45 @@ int is_dir(string& path)
 int is_file(string& path)
 {
 	int rc;
+	errno = 0;
 	struct stat fs;
 	rc = stat(path.c_str(), &fs);
-	if (rc == -1)
+	if (rc == -1) {
+		cout << "is_file: " << strerror(errno) << endl;
 		return -1;
+	}
 	if (S_ISREG(fs.st_mode))
 		return 1;
 	return 0;
+}
+
+int get_parent_path(string& path, string& parent_path)
+{
+	int rc = 0;
+	size_t sz;
+	size_t len;
+	string psv("/");
+	trim(path, psv);
+	len = path.length();
+	sz = path.rfind("/", len);
+	parent_path = path.substr(0, sz);
+	return rc;
+}
+
+int trim(string& str, string& trimed)
+{
+    int rc;
+    size_t sz = str.length();
+    string pstr;
+    pstr = str;
+    for (int i = sz - 1; i > 0; --i) {
+        rc = str.compare(i, trimed.size(), trimed);
+        if (rc == 0){
+			pstr = str.substr(0, i);
+        } else {
+			break;
+        }
+    }
+    str = pstr;
+    return sz - str.length();
 }

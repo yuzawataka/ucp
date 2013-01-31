@@ -36,9 +36,9 @@ static char* test_check_remote_path()
 	rp0 = check_remote_path(test0);
 	rp1 = check_remote_path(test1);
 	mu_assert("error, check_remote_path(\"hoge@192.168.2.1:test/test.txt\")", 
-			  rp0.id == "hoge" && rp0.host == "192.168.2.1" && rp0.path == "test/test.txt");
+			  rp0.name == "hoge" && rp0.host == "192.168.2.1" && rp0.path == "test/test.txt");
 	mu_assert("error, check_remote_path(\"192.168.2.1:test/test.txt\")", 
-			  rp1.id.empty() && rp1.host == "192.168.2.1" && rp1.path == "test/test.txt");
+			  rp1.name.empty() && rp1.host == "192.168.2.1" && rp1.path == "test/test.txt");
 	return 0;
 }
 
@@ -61,28 +61,28 @@ static char* test_get_xattr()
 }
 
 
-static char* test_set_xattr()
-{
-	string test0("ucp.cpp");
-	int rc;
-	msgpack::sbuffer sbuf;
-	rc = get_xattr(test0, &sbuf);
-	msgpack::unpacked msg;
-	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
- 	msgpack::object obj = msg.get();
-	cout << obj << endl;
-	map<string, string> xattrs;
-	obj.convert(&xattrs);
+// static char* test_set_xattr()
+// {
+// 	string test0("ucp.cpp");
+// 	int rc;
+// 	msgpack::sbuffer sbuf;
+// 	rc = get_xattr(test0, &sbuf);
+// 	msgpack::unpacked msg;
+// 	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+//  	msgpack::object obj = msg.get();
+// 	cout << obj << endl;
+// 	map<string, string> xattrs;
+// 	obj.convert(&xattrs);
 
-	string test1("/tmp/ucp-test.cpp");
-	system("/bin/touch /tmp/ucp-test.cpp");
-	rc = set_xattr((char*)test1.c_str(), &xattrs);
-	rc = get_xattr(test1, &sbuf);
-	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
- 	obj = msg.get();
-	cout << obj << endl;
-	return 0;
-}
+// 	string test1("/tmp/ucp-test.cpp");
+// 	system("/bin/touch /tmp/ucp-test.cpp");
+// 	rc = set_xattr((char*)test1.c_str(), &xattrs);
+// 	rc = get_xattr(test1, &sbuf);
+// 	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+//  	obj = msg.get();
+// 	cout << obj << endl;
+// 	return 0;
+// }
 
 
 static char* test_gen_each_meta()
@@ -107,12 +107,12 @@ static char* test_gen_chunk()
 	file_ls.push_back("test.cpp");
 	file_ls.push_back("ucp.cpp");
 	file_ls.push_back("ucpd.cpp");
-	mu_assert("error, gen_chunk()",
-			  gen_chunk(file_ls, tmpfname) >= 0);
+	// mu_assert("error, gen_chunk()",
+	// 		  gen_chunk(file_ls, tmpfname) >= 0);
 //	close(fd);
 	system("/bin/cat test.cpp ucp.cpp ucpd.cpp > /tmp/test_gen_chunk_tmp");
-	mu_assert("error, gen_chunk() diff_check",
-			  system("/usr/bin/diff -u /tmp/test_gen_chunk_tmp /tmp/test_gen_chunk_orig") == 0);
+	// mu_assert("error, gen_chunk() diff_check",
+	// 		  system("/usr/bin/diff -u /tmp/test_gen_chunk_tmp /tmp/test_gen_chunk_orig") == 0);
 	unlink("/tmp/test_gen_chunk_tmp");
 	unlink(tmpfname.c_str());
 	return 0;
@@ -132,6 +132,30 @@ static char* test_gen_chunk_meta()
 	flist.push_back("ucp.cpp");
 	flist.push_back("ucpd.cpp");
 	gen_chunk_meta(flist, rp, chunk_mta);
+	msgpack::pack(sbuf, chunk_mta);
+	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
+ 	msgpack::object obj = msg.get();
+	cout << obj << endl;
+
+	return 0;
+}
+
+static char* test_update_chunk_meta()
+{
+	string test0("root@192.168.2.1:hoge");
+	remote_path rp;
+	struct chunk_meta chunk_mta;
+	vector<string> flist;
+	msgpack::sbuffer sbuf;
+	msgpack::unpacked msg;
+
+	rp = check_remote_path(test0);
+	flist.push_back("test.cpp");
+	flist.push_back("ucp.cpp");
+	flist.push_back("ucpd.cpp");
+	gen_chunk_meta(flist, rp, chunk_mta);
+	string dest_path("/root/hoge");
+	update_chunk_meta(chunk_mta, dest_path, 0);
 	msgpack::pack(sbuf, chunk_mta);
 	msgpack::unpack(&msg, sbuf.data(), sbuf.size());
  	msgpack::object obj = msg.get();
@@ -209,6 +233,7 @@ static char * all_tests() {
 	// mu_run_test(test_gen_chunk);
 	// mu_run_test(test_get_xattr);
 	mu_run_test(test_gen_chunk_meta);
+	mu_run_test(test_update_chunk_meta);
 	// mu_run_test(test_gen_chunk_meta_hoge);
 	// mu_run_test(test_gen_whole_chunk);
 	// mu_run_test(test_get_file_list);
