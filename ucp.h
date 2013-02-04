@@ -106,7 +106,7 @@ int gen_chunk(vector<string> fnames, string tmpfname);
 int gen_whole_chunk(vector<string> fnames, chunk_meta *chunk_mta, string tmpfname);
 int get_xattr(string fname, msgpack::sbuffer* sbuf);
 int set_xattr(char *fname, map<string, string>& xattrs);
-int set_attr_rename(char *fname, struct file_info* finfo);
+int set_attr(char *fname, struct file_info* finfo);
 int gen_chunk_meta(vector<string>& flist, remote_path& rp, chunk_meta& chunk_mta);
 int update_chunk_meta(chunk_meta& chunk_mta, string& dest_path, int overwrite);
 void gen_ucp_header(struct ucp_header* hdr, unsigned char op, uint32_t token, uint32_t seq, 

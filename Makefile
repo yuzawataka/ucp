@@ -8,19 +8,19 @@ all:	ucp ucpd
 	g++ -I. -c $< -o $@
 
 ucp:	ucp.o ucp_common.o
-	g++ $(CFLAGS) -o ucp ucp.o ucp_common.o -ludt -lpthread -lmsgpack -lboost_filesystem
+	g++ $(CFLAGS) -o ucp ucp.o ucp_common.o -ludt -lpthread -lmsgpack -lboost_filesystem -lboost_system -lattr
 
 ucpd.o:	ucpd.cpp
 	g++ $(CFLAGS) -c ucpd.cpp
 
 ucpd:	ucpd.o ucp_common.o
-	g++ $(CFLAGS) -o ucpd ucpd.o ucp_common.o -ludt -lpthread -lmsgpack -lboost_filesystem
+	g++ $(CFLAGS) -o ucpd ucpd.o ucp_common.o -ludt -lpthread -lmsgpack -lboost_filesystem -lboost_system -lattr
 
 test:	test.cpp
 	rm -f *.o test
 	g++ -DTEST -D__DEBUG -c ucp_common.cpp
 	g++ -DTEST -c test.cpp
-	g++ -DTEST -o test test.o ucp_common.o -ludt -lpthread -lboost_filesystem -lmsgpack
+	g++ -DTEST -o test test.o ucp_common.o -ludt -lpthread -lmsgpack -lboost_filesystem -lboost_system
 	./test
 
 clean:

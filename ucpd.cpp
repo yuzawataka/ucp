@@ -163,6 +163,8 @@ static void* dispatch(void *usock)
 	ep = UDT::epoll_create();
     UDT::epoll_add_usock(ep, hnd);
 
+	UDT::TRACEINFO trace;
+	UDT::perfmon(hnd, &trace);
 	// =========== auth begin ===========
 	struct ucp_header hdr0, hdr1;
 	rc = ucp_recv(hnd, &hdr0, NULL, 0);
@@ -263,6 +265,8 @@ static void* dispatch(void *usock)
 		// send chunk
 		UDT::close(hnd);
 	}
+	UDT::perfmon(hnd, &trace);
+	udt_trace(trace);
 	return NULL;
 
 UCPD_ABANDON:

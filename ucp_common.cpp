@@ -29,7 +29,7 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
     int rc;
     size_t buffer_len;
     void *buffer;
-	UDT::TRACEINFO trace;
+
     buffer_len = sizeof(struct ucp_header) + header->length;
     buffer = malloc(buffer_len);
 	if (buffer == NULL) {
@@ -43,7 +43,6 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
 		memcpy((char*)buffer + sizeof(struct ucp_header), payload, header->length);
 
     // rc = UDT::send(hnd, (const char*)buffer, buffer_len, -1);
-	UDT::perfmon(hnd, &trace);
 	int64_t send_sz = 0;
 	while (buffer_len > send_sz) {
 		rc =  UDT::send(hnd, (char*)buffer + send_sz, buffer_len - send_sz, -1);
@@ -53,7 +52,7 @@ int ucp_send(UDTSOCKET hnd, struct ucp_header *header, const char *payload)
 		}
 		send_sz += rc;
 	}
-	UDT::perfmon(hnd, &trace);
+
 
 #ifdef __DEBUG
 	cout << "====== ucp_send ======" << endl;
@@ -77,7 +76,7 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
     int rc;
     size_t buffer_len;
 	void *buffer;
-	UDT::TRACEINFO trace;
+
     buffer_len = sizeof(struct ucp_header) + payload_len;
     buffer = malloc(buffer_len);
 	if (buffer == NULL) {
@@ -91,7 +90,6 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
     //     return -1;
     // } 
 
-	UDT::perfmon(hnd, &trace);
 	int64_t recv_sz = 0;
 	while (buffer_len > recv_sz) {
 		rc =  UDT::recv(hnd, (char*)buffer + recv_sz, buffer_len - recv_sz, -1);
@@ -101,7 +99,6 @@ int ucp_recv(UDTSOCKET hnd, struct ucp_header *header, char *payload, size_t pay
 		}
 		recv_sz += rc;
 	}
-	UDT::perfmon(hnd, &trace);
 
 	memcpy(header, buffer, sizeof(struct ucp_header));
 	// mmap()
@@ -571,7 +568,7 @@ int set_xattr(char* fname, map<string, string>& xattrs)
 	return rc;
 }
 
-int set_attr_rename(char *fname, struct file_info* finfo)
+int set_attr(char *fname, struct file_info* finfo)
 {
 	errno = 0;
 	struct utimbuf times;
@@ -587,10 +584,6 @@ int set_attr_rename(char *fname, struct file_info* finfo)
 		return -1;
 	}
 	if (utime(fname, &times) != 0) {
-		cout << "set_attr: " << strerror(errno) << endl;
-		return -1;
-	}
-	if (rename(fname, finfo->fname.c_str()) != 0) {
 		cout << "set_attr: " << strerror(errno) << endl;
 		return -1;
 	}
@@ -1065,6 +1058,12 @@ int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 		memset((void*)&hdr0, 0, sizeof(struct ucp_header));
 		if (S_ISDIR(i->mode)) {
 			cout <<  i->fname << " is dir." << endl;
+			path dir = i->fname;
+			if (!exists(dir)) {
+				create_directories(dir);
+				if (set_attr((char*)((i->fname).c_str()), &*i) != 0)
+				 	return -1;
+			}
 		} else {
 			cout <<  i->fname << " is file." << endl;
 			char* tmpfile;
@@ -1118,7 +1117,9 @@ int64_t ucp_recv_chunk(UDTSOCKET hnd, struct chunk_meta* chunk_mta, unsigned int
 				gen_ucp_header(&hdr1, UCP_OP_XATR_ACK, tok, seq, 0, i->fnum);
 				rc = ucp_send(hnd, &hdr1, NULL);
 			}
-			if (set_attr_rename(tmpfile, &*i) != 0)
+			if (set_attr(tmpfile, &*i) != 0)
+				return -1;
+			if (rename(tmpfile, (&*i)->fname.c_str()) != 0)
 				return -1;
 			if (tmpfile != NULL)
 				free(tmpfile);
