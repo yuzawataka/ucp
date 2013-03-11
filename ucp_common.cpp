@@ -284,7 +284,7 @@ void udt_status(UDTSOCKET s)
 
 bool check_one_colon(string& str)
 {
-    unsigned int loc;
+    size_t loc;
     loc = str.find(":", 0);
     if (loc == string::npos)
         return false;
@@ -297,7 +297,7 @@ remote_path check_remote_path(string& str)
 {
     remote_path rp;
     string name, host, path;
-    unsigned int loc0, loc1, len;
+    size_t loc0, loc1, len;
     loc0 = str.find("@", 0);
     loc1 = str.find(":", 0);
     len = str.length();
